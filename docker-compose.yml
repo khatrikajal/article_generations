@@ -1,0 +1,203 @@
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:16-alpine
+    container_name: article_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - article-network
+
+  # Redis Cache and Message Broker
+  redis:
+    image: redis:7-alpine
+    container_name: article_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - article-network
+
+  # Django Backend
+  backend:
+    build:
+      context: ./backend
+    container_name: article_backend
+    volumes:
+      - ./backend:/app
+      - static_volume:/app/staticfiles
+      - media_volume:/app/mediafiles
+      - logs_volume:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: article_generation.settings
+      PYTHONUNBUFFERED: 1
+      PYTHONPATH: /app
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    command: >
+      sh -c "pip install watchdog &&
+             python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - article-network
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./backend
+    container_name: article_celery_worker
+    volumes:
+      - ./backend:/app
+      - logs_volume:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: article_generation.settings
+      PYTHONUNBUFFERED: 1
+      PYTHONPATH: /app
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    command: celery -A article_generation worker -l info --concurrency=4
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A article_generation inspect ping"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - article-network
+
+  # Celery Beat Scheduler
+  celery_beat:
+    build:
+      context: ./backend
+    container_name: article_celery_beat
+    volumes:
+      - ./backend:/app
+      - logs_volume:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env
+    environment:
+      DJANGO_SETTINGS_MODULE: article_generation.settings
+      PYTHONUNBUFFERED: 1
+      PYTHONPATH: /app
+      POSTGRES_HOST: db
+      REDIS_HOST: redis
+    command: celery -A article_generation beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    restart: unless-stopped
+    networks:
+      - article-network
+
+  # Celery Flower (Task Monitor) - Optional
+  flower:
+    build:
+      context: ./backend
+    container_name: article_flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+      - celery_worker
+    env_file:
+      - ./backend/.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      FLOWER_PORT: 5555
+    command: celery -A article_generation flower --port=5555
+    profiles:
+      - monitoring
+    networks:
+      - article-network
+
+  # React Frontend
+  frontend:
+    image: node:20-alpine
+    container_name: article_frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      VITE_API_BASE_URL: "http://localhost:8000"
+    depends_on:
+      - backend
+    networks:
+      - article-network
+
+  # PgAdmin
+  pgadmin:
+    image: dpage/pgadmin4:8.12
+    container_name: article_pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - article-network
+
+networks:
+  article-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redis_data:
+  static_volume:
+  media_volume:
+  logs_volume:
+  pgadmin_data:
