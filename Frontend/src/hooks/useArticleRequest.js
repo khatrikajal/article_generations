@@ -30,20 +30,26 @@ const useArticleRequest = () => {
         async: requestData.async !== false, // Default to true
       };
 
+      console.log("Making API request with payload:", payload);
       const response = await api.post("generate/", payload);
 
       if (response.data.success) {
         const responseData = response.data.data;
+        console.log("API response received:", responseData);
 
         if (responseData.async && responseData.task_id) {
+          console.log("Starting async polling for task:", responseData.task_id);
           // Handle async processing - poll for results
           await pollTaskStatus(responseData.task_id);
         } else {
+          console.log("Processing synchronous response");
           // Handle synchronous response
           handleArticleResponse(responseData);
         }
       } else {
+        console.error("API request failed:", response.data);
         setError(response.data.message || "Article generation failed");
+        setLoading(false); // Important: Set loading to false on error
       }
     } catch (err) {
       console.error("Article request error:", err);
@@ -53,56 +59,100 @@ const useArticleRequest = () => {
           err.message ||
           "Failed to generate article"
       );
-    } finally {
-      setLoading(false);
+      setLoading(false); // Important: Set loading to false on error
     }
+    // Don't set loading to false here - it should only be set to false after success or error
   };
 
   /**
    * Poll task status for async requests
    */
-  const pollTaskStatus = async (taskId, maxAttempts = 30, interval = 2000) => {
+  const pollTaskStatus = async (taskId, maxAttempts = 60, interval = 3000) => {
     let attempts = 0;
+    console.log(
+      "Starting polling with max attempts:",
+      maxAttempts,
+      "interval:",
+      interval
+    );
 
     const poll = async () => {
       try {
+        console.log(
+          `Polling attempt ${attempts + 1}/${maxAttempts} for task:`,
+          taskId
+        );
         const response = await api.get(`tasks/${taskId}/status/`);
 
         if (response.data.success) {
           const taskData = response.data.data;
+          console.log("Task status:", taskData.status);
 
           if (taskData.status === "completed") {
             // Task completed successfully
+            console.log("Task completed, processing result");
             if (taskData.result && taskData.result.success) {
               handleArticleResponse(taskData.result);
-              return;
+              return; // Exit polling
             } else {
+              console.error("Task completed with errors:", taskData.result);
               setError(taskData.result?.error || "Task completed with errors");
-              return;
+              setLoading(false);
+              return; // Exit polling
             }
           } else if (taskData.status === "failed") {
             // Task failed
+            console.error("Task failed:", taskData.error);
             setError(taskData.error || "Task execution failed");
-            return;
-          } else if (taskData.status === "processing") {
+            setLoading(false);
+            return; // Exit polling
+          } else if (
+            taskData.status === "processing" ||
+            taskData.status === "pending"
+          ) {
             // Still processing, continue polling
+            attempts++;
+            if (attempts < maxAttempts) {
+              console.log("Task still processing, continuing to poll...");
+              setTimeout(poll, interval);
+            } else {
+              console.error("Task timed out after", maxAttempts, "attempts");
+              setError(
+                "Task timed out - please try again with a shorter URL or simpler content"
+              );
+              setLoading(false);
+            }
+          } else {
+            // Unknown status
+            console.warn("Unknown task status:", taskData.status);
             attempts++;
             if (attempts < maxAttempts) {
               setTimeout(poll, interval);
             } else {
-              setError("Task timed out - please try again");
+              setError("Unknown task status - please try again");
+              setLoading(false);
             }
           }
         } else {
+          console.error("Failed to check task status:", response.data);
           setError("Failed to check task status");
+          setLoading(false);
         }
       } catch (err) {
         console.error("Task polling error:", err);
-        setError("Failed to check task status");
+        attempts++;
+        if (attempts < maxAttempts) {
+          // Continue polling on network errors (API might be temporarily unavailable)
+          console.log("Polling error, retrying...");
+          setTimeout(poll, interval);
+        } else {
+          setError("Failed to check task status - please try again");
+          setLoading(false);
+        }
       }
     };
 
-    // Start polling
+    // Start polling immediately
     poll();
   };
 
@@ -110,6 +160,8 @@ const useArticleRequest = () => {
    * Handle successful article response
    */
   const handleArticleResponse = (responseData) => {
+    console.log("Processing article response:", responseData);
+
     if (responseData.article_data) {
       // Map the response data to match your component's expected structure
       const articleData = {
@@ -121,9 +173,13 @@ const useArticleRequest = () => {
         from_cache: responseData.from_cache,
       };
 
+      console.log("Setting article data:", articleData);
       setArticle(articleData);
+      setLoading(false); // Important: Set loading to false after successful article processing
     } else {
+      console.error("Invalid article data received:", responseData);
       setError("Invalid article data received");
+      setLoading(false);
     }
   };
 
