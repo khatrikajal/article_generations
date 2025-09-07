@@ -164,23 +164,23 @@ def gen_details(state: State) -> State:
         logger.info("Generating project details")
         
         task = f"""
-        Write a comprehensive project details section for this procurement/contract content:
+Write a clear and concise project details section for this procurement/contract content:
 
-        Content: {state['raw_text'][:3000]}
-        User instruction: {state.get('instruction', '')}
+Content: {state['raw_text'][:3000]}
+User instruction: {state.get('instruction', '')}
 
-        Structure the response to include:
-        - Project/contract title and reference number
-        - Scope and objectives
-        - Contract value/budget (if mentioned)
-        - Timeline and key dates
-        - Location and jurisdiction
-        - Key deliverables or milestones
+Structure the response to include:
 
-        Format as flowing paragraphs (not bullet points). Maximum 250 words.
-        Focus on factual information from the source material.
-        """
-        
+- Scope and objectives
+- Contract value/budget (if mentioned)
+- Timeline and key dates
+- Location and jurisdiction
+- Key deliverables or milestones
+
+Format the response as flowing paragraphs (not bullet points). Maximum length: 250 words.
+Focus only on factual information from the source material without adding commentary.
+"""
+
         details = run_chain(task)
         
         return {
