@@ -114,7 +114,7 @@ def _validate_headline_quality(headline: str) -> bool:
             return False
         
         # Check for basic content indicators
-        # Should contain some key elements like action words, entities, etc.
+        
         action_words = ['awarded', 'wins', 'signs', 'announces', 'selects', 'contracts', 'receives']
         has_action = any(word.lower() in headline.lower() for word in action_words)
         
